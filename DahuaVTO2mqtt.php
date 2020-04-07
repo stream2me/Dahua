@@ -1,9 +1,18 @@
 <?PHP
+require("phpMQTT.php");
+
+$server = "mqtt.example.com";     // change if necessary
+$port = 1883;                     // change if necessary
+$username = "";                   // set your username
+$password = "";                   // set your password
+$client_id = "Dahua-VTO"; // make sure this is unique for connecting to sever - you could use uniqid()
+
 $debug = true;
 echo "<** Dahua VTO Eventempfaenger START **>\n";
-$Dahua = new Dahua_Functions("192.168.1.208", "admin", "password"); # VTO's IP and user/pwd
+$Dahua = new Dahua_Functions("192.168.1.111", "admin", "password"); # VTO's IP and user/pwd
 $status = $Dahua->Main();
 logging("All done");
+
 function logging($text){
 	list($ts) = explode(".",microtime(true));
 	$dt = new DateTime(date("Y-m-d H:i:s.",$ts));
@@ -12,8 +21,8 @@ function logging($text){
 	print_r($text);
 	echo "\n";
 }
-class Dahua_Functions
-{
+
+class Dahua_Functions {
     private $sock, $host, $port, $credentials;
     private $ID = 0;                        # Our Request / Responce ID that must be in all requests and initated by us
     private $SessionID = 0;                 # Session ID will be returned after successful login
@@ -23,21 +32,41 @@ class Dahua_Functions
     private $keepAliveInterval = 60;
     private $lastKeepAlive = 0;
 
-    function Dahua_Functions($host, $user, $pass)
-    {
+    function Dahua_Functions($host, $user, $pass) {
         $this->host = $host;
         $this->username = $user;
         $this->password = $pass;
     }
-    function Gen_md5_hash($Dahua_random, $Dahua_realm, $username, $password)
-    {
+	
+    function Gen_md5_hash($Dahua_random, $Dahua_realm, $username, $password) {
         $PWDDB_HASH = strtoupper(md5($username.':'.$Dahua_realm.':'.$password));
         $PASS = $username.':'.$Dahua_random.':'.$PWDDB_HASH;
         $RANDOM_HASH = strtoupper(md5($PASS));
         return $RANDOM_HASH;
     }
-    function KeepAlive($delay)
-    {
+
+    function publish($name, $payload){
+	$mqtt_message = json_encode($payload);
+	$topic = $topicPrefix."/".$name."/Event";
+	$log_message = "Topic: ".$topic.", Payload: ".$mqtt_message;
+		
+	try {
+		$mqtt = new phpMQTT($server, $port, $client_id);
+			
+        if ($mqtt->connect(true, NULL, $username, $password)) {
+			$mqtt->publish($topic, $mqtt_message, 0);
+			$mqtt->close();
+			logging("MQTT message published, ".$log_message);
+	} else {
+	    logging("Failed to publish MQTT message due to timeout, ".$log_message);
+		}
+        } 
+	catch (Exception $e) {
+	    logging("Failed to publish MQTT message due to error: ".$e.", ".$log_message);
+        }
+	}
+	
+    function KeepAlive($delay) {
 		global $debug;
         logging("Started keepAlive thread");
         while(true){
@@ -74,8 +103,8 @@ class Dahua_Functions
             }
         }
     }
-    function Send($packet)
-    {
+	
+    function Send($packet) {
         if (empty($packet)){
             $packet = '';
         }
@@ -102,8 +131,8 @@ class Dahua_Functions
             logging($e);
         }
     }
-    function Receive($timeout = 5)
-    {
+	
+    function Receive($timeout = 5) {
         #
         # We must expect there is no output from remote device
         # Some debug cmd do not return any output, some will return after timeout/failure, most will return directly
@@ -135,6 +164,7 @@ class Dahua_Functions
 
         $LEN_RECVED = 1;
         $LEN_EXPECT = 1;
+	    
         while (strlen($data)>0){
             if (substr($data,0,8) == pack("N",0x20000000).pack("N",0x44484950)){ # DHIP
                 $P2P_header = substr($data,0,32);
@@ -155,6 +185,7 @@ class Dahua_Functions
         }
         return $P2P_return_data;
     }
+	
     function Login()
     {
         logging("Start login");
@@ -215,8 +246,8 @@ class Dahua_Functions
         logging("Login failed: ".$data['error']['code']." ".$data['error']['message']);
         return false;
     }
-    function Main($reconnectTimeout=60)
-    {
+	
+    function Main($reconnectTimeout=60) {
         $error = false;
         while (true){
             if($error){
@@ -260,16 +291,31 @@ class Dahua_Functions
             logging("Failure no keep alive received");
         }
     }
-    function EventHandler($data)
-    {
-	global $debug;
-	$eventList = $data['params']['eventList'][0];
-	$eventCode = $eventList['Code'];
-	$eventData = $eventList['Data'];
-	if(count($data['params']['eventList'])>1){
+	
+    function EventHandler($data){
+	$allEvents = $data['params']['eventList'];
+	if(count($allEvents) > 1){
 		logging("Event Manager subscription reply");
 	}
-	elseif($eventCode == 'CallNoAnswered'){
+	else {		
+		foreach ($allEvents as $item) {
+			$eventCode = $item['Code'];
+			$eventData = $item['Data'];
+			$eventAction = $item['Action'];		
+			$this->SingleEventHandler($eventCode, $eventAction, $eventData);
+			$payload = array(
+				"Action" => $eventAction,
+				"Data" => $eventData
+			);
+			$this->publish($eventCode, $payload);
+		}
+	}
+	return true;
+    }
+	
+    function SingleEventHandler($eventCode, $eventAction, $eventData) {
+	global $debug;
+	if($eventCode == 'CallNoAnswered'){
 		logging("Event Call from VTO");
 	}
 	elseif($eventCode == 'IgnoreInvite'){
@@ -333,10 +379,11 @@ class Dahua_Functions
 		if($eventList['Action'] == 'Pulse'){
 		$cardno=($eventData['Number']);
 		logging("DoorCard ".$cardno." was used at door");
+		}
 	}
 	elseif($eventCode == 'SIPRegisterResult'){
 		if($eventList['Action'] == 'Pulse'){
-		if($eventData['Success']) logging("Event SIPRegisterResult, Success");
+			if($eventData['Success']) logging("Event SIPRegisterResult, Success");
 			else  logging("Event SIPRegisterResult, Failed)");
 		}
 	}
@@ -368,8 +415,8 @@ class Dahua_Functions
 	}
 	return true;
 	}
-	function SaveSnapshot($path="/tmp/")
-	{
+	
+	function SaveSnapshot($path="/tmp/") {
 	$filename = $path."/DoorBell_".date("Y-m-d_H-i-s").".jpg";
 	$fp = fopen($filename, 'wb');
 	$url = "http://".$this->host."/cgi-bin/snapshot.cgi";
