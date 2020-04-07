@@ -1,12 +1,6 @@
 <?PHP
 require("phpMQTT.php");
 
-$server = "mqtt.example.com";     // change if necessary
-$port = 1883;                     // change if necessary
-$username = "";                   // set your username
-$password = "";                   // set your password
-$client_id = "Dahua-VTO"; // make sure this is unique for connecting to sever - you could use uniqid()
-
 $debug = true;
 echo "<** Dahua VTO Eventempfaenger START **>\n";
 $Dahua = new Dahua_Functions("192.168.1.111", "admin", "password"); # VTO's IP and user/pwd
@@ -46,6 +40,13 @@ class Dahua_Functions {
     }
 
     function publish($name, $payload){
+        $server = "mqtt.example.com";     // change if necessary
+        $port = 1883;                     // change if necessary
+        $username = "";                   // set your username
+        $password = "";                   // set your password
+        $topicPrefix = "VTO3211D";        // Unit name	
+	$client_id = "dahua-vto-".strtolower($topicPrefix);  
+	 
 	$mqtt_message = json_encode($payload);
 	$topic = $topicPrefix."/".$name."/Event";
 	$log_message = "Topic: ".$topic.", Payload: ".$mqtt_message;
@@ -411,7 +412,7 @@ class Dahua_Functions {
 		}
 	else{
 		logging("Unknown event received");
-		if($debug) var_dump($data);
+		//if($debug) var_dump($data);
 	}
 	return true;
 	}
